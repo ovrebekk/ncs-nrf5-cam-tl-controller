@@ -26,13 +26,15 @@
 
 #include <dk_buttons_and_leds.h>
 
+#include "cam_tl_control.h"
+
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
 
 
 #define RUN_STATUS_LED          DK_LED1
 #define CON_STATUS_LED          DK_LED2
-#define RUN_LED_BLINK_INTERVAL  1000
+#define RUN_LED_BLINK_INTERVAL  100
 
 #define USER_LED                DK_LED3
 
@@ -155,13 +157,13 @@ static struct bt_lbs_cb lbs_callbacs = {
 	.button_cb = app_button_cb,
 };
 
+static volatile bool take_picture_override = false;
 static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	if (has_changed & USER_BUTTON) {
 		uint32_t user_button_state = button_state & USER_BUTTON;
 
-		bt_lbs_send_button_state(user_button_state);
-		app_button_state = user_button_state ? true : false;
+		if(user_button_state) take_picture_override = true;
 	}
 }
 
@@ -182,7 +184,10 @@ void main(void)
 	int blink_status = 0;
 	int err;
 
-	printk("Starting Bluetooth Peripheral LBS example\n");
+	printk("Starting Camera timelapse control example\n");
+
+	cam_tl_control_config_t cam_config = {.pin_focus = 3, .pin_shutter = 4};
+	cam_tl_control_init(&cam_config);
 
 	err = dk_leds_init();
 	if (err) {
@@ -228,8 +233,25 @@ void main(void)
 
 	printk("Advertising successfully started\n");
 
+	uint32_t uptime, uptime_last_pic_taken = 0xFFFF;
+	uint32_t pic_interval_ms = 10 * 60 * 1000;
 	for (;;) {
 		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
+
+		// Take picture at regular intervals, by reading the Zephyr uptime
+		uptime = k_uptime_get();
+		if((uptime - uptime_last_pic_taken) > pic_interval_ms) {
+			printk("Picture triggered by timer...\n");
+			uptime_last_pic_taken = uptime;
+			cam_tl_control_take_picture();
+		}
+
+		// If the user button is pressed, take a picture
+		if(take_picture_override) {
+			take_picture_override = false;
+			printk("Picture triggered by button...\n");
+			cam_tl_control_take_picture();
+		}
 	}
 }
