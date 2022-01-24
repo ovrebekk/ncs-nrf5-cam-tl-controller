@@ -13,6 +13,9 @@
 #include <zephyr.h>
 #include <drivers/gpio.h>
 #include <soc.h>
+#include <time.h>
+/* clock_gettime() prototype */
+#include <posix/time.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
@@ -179,6 +182,46 @@ static int init_button(void)
 	return err;
 }
 
+static void time_debug(void)
+{
+	static bool first_time = true;
+	static struct tm* ptr;
+	struct tm start_time;
+    static time_t t;
+	static time_t time_at_last_pic = 0;
+	struct timespec ts;
+
+	static uint32_t time_since_last_pic_s = 0xFFFFFFFF;
+	
+	if(first_time) {
+		first_time = false;
+		start_time.tm_year = 122;
+		start_time.tm_mon = 0;
+		start_time.tm_mday = 24;
+		start_time.tm_hour = 8;
+		start_time.tm_min = 12;
+		start_time.tm_sec = 12;
+		t = mktime(&start_time);
+		ts.tv_sec = t;
+		ts.tv_nsec = 0;
+		clock_settime(CLOCK_REALTIME, &ts);
+		printk("Time set to: %s", asctime(&start_time));
+	}
+
+	// Sjekk 
+	t = time(NULL);
+    ptr = localtime(&t);
+
+	// Check if this is within the active picture period
+	if(ptr->tm_hour >= 8 && ptr->tm_hour <= 18 && ptr->tm_wday >= 1 && ptr->tm_wday <= 5) {
+		if((t - time_at_last_pic) >= (5*60)) {
+			time_at_last_pic = t;
+			printk("Taking picture at time %s\n", asctime(ptr), ptr->tm_wday);
+			cam_tl_control_take_picture();
+		}
+	}
+}
+
 void main(void)
 {
 	int blink_status = 0;
@@ -186,7 +229,7 @@ void main(void)
 
 	printk("Starting Camera timelapse control example\n");
 
-	cam_tl_control_config_t cam_config = {.pin_focus = 3, .pin_shutter = 4};
+	cam_tl_control_config_t cam_config = {.pin_focus = 24, .pin_shutter = 25};
 	cam_tl_control_init(&cam_config);
 
 	err = dk_leds_init();
@@ -239,6 +282,7 @@ void main(void)
 		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 
+#if 0
 		// Take picture at regular intervals, by reading the Zephyr uptime
 		uptime = k_uptime_get();
 		if((uptime - uptime_last_pic_taken) > pic_interval_ms) {
@@ -246,12 +290,14 @@ void main(void)
 			uptime_last_pic_taken = uptime;
 			cam_tl_control_take_picture();
 		}
-
+#endif
 		// If the user button is pressed, take a picture
 		if(take_picture_override) {
 			take_picture_override = false;
 			printk("Picture triggered by button...\n");
 			cam_tl_control_take_picture();
 		}
+
+		time_debug();
 	}
 }

@@ -25,9 +25,9 @@ void cam_tl_control_init(cam_tl_control_config_t *config)
 void cam_tl_control_take_picture(void)
 {
 	PIN_FOCUS_SET();
-	k_msleep(5);
+	k_msleep(700);
 	PIN_SHUTTER_SET();
-	k_msleep(200);
+	k_msleep(100);
 	PIN_FOCUS_CLR();
 	PIN_SHUTTER_CLR();
 }
