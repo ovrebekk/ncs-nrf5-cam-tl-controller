@@ -14,6 +14,7 @@
 #include <drivers/gpio.h>
 #include <soc.h>
 #include <time.h>
+#include <stdio.h>
 /* clock_gettime() prototype */
 #include <posix/time.h>
 
@@ -23,7 +24,7 @@
 #include <bluetooth/uuid.h>
 #include <bluetooth/gatt.h>
 
-#include <bluetooth/services/lbs.h>
+#include <bluetooth/services/nus.h>
 
 #include <settings/settings.h>
 
@@ -43,7 +44,18 @@
 
 #define USER_BUTTON             DK_BTN1_MSK
 
-static bool app_button_state;
+#define UART_BUF_SIZE CONFIG_BT_NUS_UART_BUFFER_SIZE
+
+// Until the kit is configured through the app, run at a constant interval (since accurate time is not set)
+static bool m_time_set_from_app = false;
+static int m_picture_interval_s = 10*60;
+static int m_pic_cap_start_hour = 8;
+static int m_pic_cap_start_min = 0;
+static int m_pic_cap_end_hour = 17;
+static int m_pic_cap_end_min = 59;
+static bool m_nus_notifications_enabled = false;
+
+static struct bt_gatt_exchange_params exchange_params;
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -51,8 +63,26 @@ static const struct bt_data ad[] = {
 };
 
 static const struct bt_data sd[] = {
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_LBS_VAL),
+	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NUS_VAL),
 };
+
+struct bt_conn *m_conn = 0;
+
+static void exchange_func(struct bt_conn *conn, uint8_t att_err,
+			  struct bt_gatt_exchange_params *params)
+{
+	struct bt_conn_info info = {0};
+	int err;
+
+	printk("MTU exchange %s\n", att_err == 0 ? "successful" : "failed");
+
+	err = bt_conn_get_info(conn, &info);
+	if (err) {
+		printk("Failed to get connection info %d\n", err);
+		return;
+	}
+}
+
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -64,6 +94,17 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	printk("Connected\n");
 
 	dk_set_led_on(CON_STATUS_LED);
+
+	exchange_params.func = exchange_func;
+
+	err = bt_gatt_exchange_mtu(conn, &exchange_params);
+	if (err) {
+		printk("MTU exchange failed (err %d)\n", err);
+	} else {
+		printk("MTU exchange pending\n");
+	}
+	
+	m_conn = conn;
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -71,6 +112,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	printk("Disconnected (reason %u)\n", reason);
 
 	dk_set_led_off(CON_STATUS_LED);
+
+	m_nus_notifications_enabled = false;
 }
 
 #ifdef CONFIG_BT_LBS_SECURITY_ENABLED
@@ -139,26 +182,11 @@ static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.cancel = auth_cancel,
 	.pairing_complete = pairing_complete,
-	.pairing_failed = pairing_failed
+	.pairing_failed = pairing_failed,
 };
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
 #endif
-
-static void app_led_cb(bool led_state)
-{
-	dk_set_led(USER_LED, led_state);
-}
-
-static bool app_button_cb(void)
-{
-	return app_button_state;
-}
-
-static struct bt_lbs_cb lbs_callbacs = {
-	.led_cb    = app_led_cb,
-	.button_cb = app_button_cb,
-};
 
 static volatile bool take_picture_override = false;
 static void button_changed(uint32_t button_state, uint32_t has_changed)
@@ -181,6 +209,106 @@ static int init_button(void)
 
 	return err;
 }
+static int convert_ascii_int(const uint8_t *str_ptr, int num_digits)
+{
+	int ret_val = 0;
+	int multiplier = 1;
+	for(int i = 0; i < (num_digits - 1); i++) multiplier *= 10;
+	for(int i = 0; i < num_digits; i++) {
+		if(str_ptr[i] >= '0' && str_ptr[i] <= '9'){
+			ret_val += ((str_ptr[i] - '0') * multiplier);
+			multiplier /= 10;
+		}
+		else return 0;
+	}
+	return ret_val;
+}
+
+static int send_nus_response_str(char *response)
+{
+	if(m_nus_notifications_enabled && strlen(response) > 0) {
+		bt_nus_send(m_conn, response, strlen(response));
+		return 0;
+	}
+	return -1;
+}
+
+static volatile bool time_update_requested = false;
+static volatile bool take_picture_requested = false;
+
+void on_nus_received(struct bt_conn *conn, const uint8_t *const data, uint16_t len)
+{
+	struct tm set_time;
+	static char response_msg[128];
+	memcpy(response_msg, data, len);
+	response_msg[len+1] = 0;
+	//printk("NUS CMD received (len %i): %s\n", len, response_msg);
+	if(len >= 2){
+		// Set time command
+		if(data[0] == 's' && data[1] == 't' && len == 14){
+			set_time.tm_year = convert_ascii_int(data + 2, 2) + 100;
+			set_time.tm_mon = convert_ascii_int(data + 4, 2);
+			set_time.tm_mday = convert_ascii_int(data + 6, 2);
+			set_time.tm_hour = convert_ascii_int(data + 8, 2);
+			set_time.tm_min = convert_ascii_int(data + 10, 2);
+			set_time.tm_sec = convert_ascii_int(data + 12, 2);
+			time_t t = mktime(&set_time);
+			struct timespec ts;
+			ts.tv_sec = t;
+			ts.tv_nsec = 0;
+			m_time_set_from_app = true;
+			sprintf(response_msg, "Time set over NUS: %s", asctime(&set_time));
+		}
+		// Set capture interval command
+		else if(data[0] == 's' && data[1] == 'i' && len == 6){
+			m_picture_interval_s = convert_ascii_int(data + 2, 4);
+			if(m_picture_interval_s < 30) m_picture_interval_s = 30;
+			sprintf(response_msg, "Picture interval set to %i", m_picture_interval_s);
+		}
+		// Set capture start time command
+		else if(data[0] == 'c' && data[1] == 's' && len == 6){
+			m_pic_cap_start_hour = convert_ascii_int(data + 2, 2);
+			m_pic_cap_start_min = convert_ascii_int(data + 4, 2);
+			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_start_hour, m_pic_cap_start_min);
+		}
+		// Set capture start time command
+		else if(data[0] == 'c' && data[1] == 'e' && len == 6){
+			m_pic_cap_end_hour = convert_ascii_int(data + 2, 2);
+			m_pic_cap_end_min = convert_ascii_int(data + 4, 2);
+			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
+		}
+		// Get current time command
+		else if(data[0] == 'g' && data[1] == 't' && len == 2){
+			static time_t t;
+			static struct tm *ptr;
+						// Check current time 
+			t = time(NULL);
+			ptr = localtime(&t);
+			//time_update_requested = true;
+			sprintf(response_msg, "Current time: %s", asctime(ptr));
+		}
+		else if(data[0] == 't' && data[1] == 'p' && len == 2){
+			take_picture_requested = true;
+			sprintf(response_msg, "Picture request received");
+		}
+		else sprintf(response_msg, "Unknown NUS command received!");
+	}
+	printk("%s\n", response_msg);
+	send_nus_response_str(response_msg);
+}
+
+void on_nus_sent(struct bt_conn *conn)
+{
+
+}
+
+void on_nus_send_enabled(enum bt_nus_send_status status)
+{
+	if(status == BT_NUS_SEND_STATUS_ENABLED) m_nus_notifications_enabled = true;
+	else m_nus_notifications_enabled = false;
+}
+
+struct bt_nus_cb nus_callbacks = {.received = on_nus_received, .sent = on_nus_sent, .send_enabled = on_nus_send_enabled};
 
 static void time_debug(void)
 {
@@ -191,8 +319,6 @@ static void time_debug(void)
 	static time_t time_at_last_pic = 0;
 	struct timespec ts;
 
-	static uint32_t time_since_last_pic_s = 0xFFFFFFFF;
-	
 	if(first_time) {
 		first_time = false;
 		start_time.tm_year = 122;
@@ -208,15 +334,17 @@ static void time_debug(void)
 		printk("Time set to: %s", asctime(&start_time));
 	}
 
-	// Sjekk 
+	// Check current time 
 	t = time(NULL);
     ptr = localtime(&t);
 
 	// Check if this is within the active picture period
-	if(ptr->tm_hour >= 8 && ptr->tm_hour <= 18 && ptr->tm_wday >= 1 && ptr->tm_wday <= 5) {
-		if((t - time_at_last_pic) >= (5*60)) {
+	if(!m_time_set_from_app || (ptr->tm_hour >= m_pic_cap_start_hour && ptr->tm_hour <= m_pic_cap_end_hour && ptr->tm_wday >= 1 && ptr->tm_wday <= 5)) {
+		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_start_hour && ptr->tm_min < m_pic_cap_start_min) return;
+		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_end_hour && ptr->tm_min > m_pic_cap_end_min) return;
+		if((t - time_at_last_pic) >= m_picture_interval_s) {
 			time_at_last_pic = t;
-			printk("Taking picture at time %s\n", asctime(ptr), ptr->tm_wday);
+			printk("Taking picture at time %s\n", asctime(ptr));
 			cam_tl_control_take_picture();
 		}
 	}
@@ -261,9 +389,9 @@ void main(void)
 		settings_load();
 	}
 
-	err = bt_lbs_init(&lbs_callbacs);
+	err = bt_nus_init(&nus_callbacks);
 	if (err) {
-		printk("Failed to init LBS (err:%d)\n", err);
+		printk("Failed to init NUS (err:%d)\n", err);
 		return;
 	}
 
@@ -275,27 +403,29 @@ void main(void)
 	}
 
 	printk("Advertising successfully started\n");
-
-	uint32_t uptime, uptime_last_pic_taken = 0xFFFF;
-	uint32_t pic_interval_ms = 10 * 60 * 1000;
+	static char printbuf[128];
+	static time_t t;
+	static struct tm *ptr;
 	for (;;) {
 		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 
-#if 0
-		// Take picture at regular intervals, by reading the Zephyr uptime
-		uptime = k_uptime_get();
-		if((uptime - uptime_last_pic_taken) > pic_interval_ms) {
-			printk("Picture triggered by timer...\n");
-			uptime_last_pic_taken = uptime;
+		// If the user button is pressed, take a picture
+		if(take_picture_requested) {
+			take_picture_requested = false;
+			printk("Triggering picture manually\n");
 			cam_tl_control_take_picture();
 		}
-#endif
-		// If the user button is pressed, take a picture
-		if(take_picture_override) {
-			take_picture_override = false;
-			printk("Picture triggered by button...\n");
-			cam_tl_control_take_picture();
+
+		if(time_update_requested) {
+			time_update_requested = false;
+	
+			// Check current time 
+			t = time(NULL);
+			ptr = localtime(&t);
+			sprintf(printbuf, "Current time: %s", asctime(ptr));
+			printk("Current time requested: %s\n", asctime(ptr));
+			send_nus_response_str(printbuf);
 		}
 
 		time_debug();
