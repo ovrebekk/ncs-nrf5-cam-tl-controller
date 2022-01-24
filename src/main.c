@@ -256,6 +256,7 @@ void on_nus_received(struct bt_conn *conn, const uint8_t *const data, uint16_t l
 			struct timespec ts;
 			ts.tv_sec = t;
 			ts.tv_nsec = 0;
+			clock_settime(CLOCK_REALTIME, &ts);
 			m_time_set_from_app = true;
 			sprintf(response_msg, "Time set over NUS: %s", asctime(&set_time));
 		}
