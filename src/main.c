@@ -43,6 +43,7 @@
 #define USER_LED                DK_LED3
 
 #define USER_BUTTON             DK_BTN1_MSK
+#define BLE_ENABLE_BUTTON       DK_BTN2_MSK
 
 #define UART_BUF_SIZE CONFIG_BT_NUS_UART_BUFFER_SIZE
 
@@ -54,6 +55,9 @@ static int m_pic_cap_start_min = 0;
 static int m_pic_cap_end_hour = 17;
 static int m_pic_cap_end_min = 59;
 static bool m_nus_notifications_enabled = false;
+
+static int m_pics_taken_since_reset = 0;
+static int m_pics_taken_since_last_ble_command = 0;
 
 static struct bt_gatt_exchange_params exchange_params;
 
@@ -67,6 +71,21 @@ static const struct bt_data sd[] = {
 };
 
 struct bt_conn *m_conn = 0;
+
+static void app_bt_start_advertising(bool enable) 
+{
+	int err;
+	if(enable) {
+		err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
+					sd, ARRAY_SIZE(sd));
+		if (err) {
+			printk("Advertising failed to start (err %d)\n", err);
+			return;
+		}
+	} else {
+		err = bt_le_adv_stop
+	}
+}
 
 static void exchange_func(struct bt_conn *conn, uint8_t att_err,
 			  struct bt_gatt_exchange_params *params)
@@ -189,12 +208,21 @@ static struct bt_conn_auth_cb conn_auth_callbacks;
 #endif
 
 static volatile bool take_picture_override = false;
+static volatile bool ble_enabled = true;
 static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	if (has_changed & USER_BUTTON) {
 		uint32_t user_button_state = button_state & USER_BUTTON;
 
 		if(user_button_state) take_picture_override = true;
+	}
+	if ((has_changed & BLE_ENABLE_BUTTON) && (button_state & BLE_ENABLE_BUTTON)) {
+		ble_enabled = !ble_enabled;
+		if(ble_enabled) {
+			printk("BLE Enabled\n");
+		} else {
+			printk("BLE Disabled\n");
+		}
 	}
 }
 
@@ -236,22 +264,38 @@ static int send_nus_response_str(char *response)
 static volatile bool time_update_requested = false;
 static volatile bool take_picture_requested = false;
 
+typedef struct {
+	uint8_t buf[24];
+	uint32_t len;
+} uart_message_t;
+K_MSGQ_DEFINE(nus_msg_queue, sizeof(uart_message_t), 8, 4);
+
 void on_nus_received(struct bt_conn *conn, const uint8_t *const data, uint16_t len)
+{
+	static uart_message_t new_message;
+	if(len > 23) len = 23;
+	memcpy(new_message.buf, data, len);
+	new_message.buf[len] = 0;
+	new_message.len = len;
+	k_msgq_put(&nus_msg_queue, &new_message, K_NO_WAIT);
+}
+
+#define CHECK_CAM_CMD(a, b) (strncmp(a, msg->buf, 2) == 0 && msg->len == b)
+
+static void process_nus_packet(uart_message_t *msg)
 {
 	struct tm set_time;
 	static char response_msg[128];
-	memcpy(response_msg, data, len);
-	response_msg[len+1] = 0;
 	//printk("NUS CMD received (len %i): %s\n", len, response_msg);
-	if(len >= 2){
+	if(msg->len >= 2){
 		// Set time command
-		if(data[0] == 's' && data[1] == 't' && len == 14){
-			set_time.tm_year = convert_ascii_int(data + 2, 2) + 100;
-			set_time.tm_mon = convert_ascii_int(data + 4, 2);
-			set_time.tm_mday = convert_ascii_int(data + 6, 2);
-			set_time.tm_hour = convert_ascii_int(data + 8, 2);
-			set_time.tm_min = convert_ascii_int(data + 10, 2);
-			set_time.tm_sec = convert_ascii_int(data + 12, 2);
+		if(CHECK_CAM_CMD("st", 14)){
+			set_time.tm_year = convert_ascii_int(msg->buf + 2, 2) + 100;
+			set_time.tm_mon = convert_ascii_int(msg->buf + 4, 2);
+			set_time.tm_mday = convert_ascii_int(msg->buf + 6, 2);
+			set_time.tm_hour = convert_ascii_int(msg->buf + 8, 2);
+			set_time.tm_min = convert_ascii_int(msg->buf + 10, 2);
+			set_time.tm_sec = convert_ascii_int(msg->buf + 12, 2);
 			time_t t = mktime(&set_time);
 			struct timespec ts;
 			ts.tv_sec = t;
@@ -261,34 +305,46 @@ void on_nus_received(struct bt_conn *conn, const uint8_t *const data, uint16_t l
 			sprintf(response_msg, "Time set over NUS: %s", asctime(&set_time));
 		}
 		// Set capture interval command
-		else if(data[0] == 's' && data[1] == 'i' && len == 6){
-			m_picture_interval_s = convert_ascii_int(data + 2, 4);
+		else if(CHECK_CAM_CMD("si", 6)){
+			m_picture_interval_s = convert_ascii_int(msg->buf + 2, 4);
 			if(m_picture_interval_s < 30) m_picture_interval_s = 30;
 			sprintf(response_msg, "Picture interval set to %i", m_picture_interval_s);
 		}
 		// Set capture start time command
-		else if(data[0] == 'c' && data[1] == 's' && len == 6){
-			m_pic_cap_start_hour = convert_ascii_int(data + 2, 2);
-			m_pic_cap_start_min = convert_ascii_int(data + 4, 2);
+		else if(CHECK_CAM_CMD("cs", 6)){
+			m_pic_cap_start_hour = convert_ascii_int(msg->buf + 2, 2);
+			m_pic_cap_start_min = convert_ascii_int(msg->buf + 4, 2);
 			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_start_hour, m_pic_cap_start_min);
 		}
-		// Set capture start time command
-		else if(data[0] == 'c' && data[1] == 'e' && len == 6){
-			m_pic_cap_end_hour = convert_ascii_int(data + 2, 2);
-			m_pic_cap_end_min = convert_ascii_int(data + 4, 2);
-			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
+		// Set capture end time command
+		else if(CHECK_CAM_CMD("ce", 6)){
+			m_pic_cap_end_hour = convert_ascii_int(msg->buf + 2, 2);
+			m_pic_cap_end_min = convert_ascii_int(msg->buf + 4, 2);
+			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
 		}
 		// Get current time command
-		else if(data[0] == 'g' && data[1] == 't' && len == 2){
+		else if(CHECK_CAM_CMD("gt", 2)){
 			static time_t t;
 			static struct tm *ptr;
-						// Check current time 
+			
+			// Check current time 
 			t = time(NULL);
 			ptr = localtime(&t);
-			//time_update_requested = true;
 			sprintf(response_msg, "Current time: %s", asctime(ptr));
 		}
-		else if(data[0] == 't' && data[1] == 'p' && len == 2){
+		// Get status command
+		else if(CHECK_CAM_CMD("gs", 2)){
+			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_start_hour, m_pic_cap_start_min);
+			send_nus_response_str(response_msg);
+			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
+			send_nus_response_str(response_msg);
+			sprintf(response_msg, "Picture interval: %i", m_picture_interval_s);
+			send_nus_response_str(response_msg);
+			sprintf(response_msg, "Pics since reset: %i, pics since BLE activity: %i", m_pics_taken_since_reset, m_pics_taken_since_last_ble_command);
+			send_nus_response_str(response_msg);
+			response_msg[0] = 0;
+		}
+		else if(CHECK_CAM_CMD("tp", 2)){
 			take_picture_requested = true;
 			sprintf(response_msg, "Picture request received");
 		}
@@ -296,6 +352,7 @@ void on_nus_received(struct bt_conn *conn, const uint8_t *const data, uint16_t l
 	}
 	printk("%s\n", response_msg);
 	send_nus_response_str(response_msg);
+	m_pics_taken_since_last_ble_command = 0;
 }
 
 void on_nus_sent(struct bt_conn *conn)
@@ -347,6 +404,8 @@ static void time_debug(void)
 			time_at_last_pic = t;
 			printk("Taking picture at time %s\n", asctime(ptr));
 			cam_tl_control_take_picture();
+			m_pics_taken_since_reset++;
+			m_pics_taken_since_last_ble_command++;
 		}
 	}
 }
@@ -383,7 +442,7 @@ void main(void)
 		printk("Bluetooth init failed (err %d)\n", err);
 		return;
 	}
-
+	
 	printk("Bluetooth initialized\n");
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
@@ -396,17 +455,13 @@ void main(void)
 		return;
 	}
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-			      sd, ARRAY_SIZE(sd));
-	if (err) {
-		printk("Advertising failed to start (err %d)\n", err);
-		return;
-	}
+	app_bt_start_advertising(true);
 
 	printk("Advertising successfully started\n");
 	static char printbuf[128];
 	static time_t t;
 	static struct tm *ptr;
+	uint32_t time_debug_counter = 0;
 	for (;;) {
 		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
@@ -416,6 +471,8 @@ void main(void)
 			take_picture_requested = false;
 			printk("Triggering picture manually\n");
 			cam_tl_control_take_picture();
+			m_pics_taken_since_reset++;
+			m_pics_taken_since_last_ble_command++;
 		}
 
 		if(time_update_requested) {
@@ -429,6 +486,15 @@ void main(void)
 			send_nus_response_str(printbuf);
 		}
 
-		time_debug();
+		if(time_debug_counter > 1000) {
+			time_debug();
+			time_debug_counter -= 1000;
+		}
+		time_debug_counter += RUN_LED_BLINK_INTERVAL;
+		
+		static uart_message_t new_msg;
+		if(k_msgq_get(&nus_msg_queue, &new_msg, K_NO_WAIT) == 0) {
+			process_nus_packet(&new_msg);
+		}
 	}
 }
