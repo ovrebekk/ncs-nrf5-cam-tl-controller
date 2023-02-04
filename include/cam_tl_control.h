@@ -1,7 +1,7 @@
 #ifndef __CAM_TL_CONTROL_H
 #define __CAM_TL_CONTROL_H
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
 
 typedef struct {

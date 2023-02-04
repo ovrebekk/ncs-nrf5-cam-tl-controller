@@ -8,25 +8,25 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/printk.h>
-#include <sys/byteorder.h>
-#include <zephyr.h>
-#include <drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <soc.h>
 #include <time.h>
 #include <stdio.h>
 /* clock_gettime() prototype */
-#include <posix/time.h>
+#include <zephyr/posix/time.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <bluetooth/services/nus.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -83,7 +83,7 @@ static void app_bt_start_advertising(bool enable)
 			return;
 		}
 	} else {
-		err = bt_le_adv_stop
+		err = bt_le_adv_stop();
 	}
 }
 
@@ -179,29 +179,9 @@ static void auth_cancel(struct bt_conn *conn)
 	printk("Pairing cancelled: %s\n", addr);
 }
 
-static void pairing_complete(struct bt_conn *conn, bool bonded)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	printk("Pairing completed: %s, bonded: %d\n", addr, bonded);
-}
-
-static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	printk("Pairing failed conn: %s, reason %d\n", addr, reason);
-}
-
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.cancel = auth_cancel,
-	.pairing_complete = pairing_complete,
-	.pairing_failed = pairing_failed,
 };
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
