@@ -54,6 +54,7 @@ static int m_pic_cap_start_hour = 8;
 static int m_pic_cap_start_min = 0;
 static int m_pic_cap_end_hour = 17;
 static int m_pic_cap_end_min = 59;
+static bool m_wday_on_map[7] = {true, true, true, true, true, true, true};
 static bool m_nus_notifications_enabled = false;
 
 static int m_pics_taken_since_reset = 0;
@@ -302,6 +303,17 @@ static void process_nus_packet(uart_message_t *msg)
 			m_pic_cap_end_min = convert_ascii_int(msg->buf + 4, 2);
 			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
 		}
+		// Set weekday map command
+		else if(CHECK_CAM_CMD("wm", 9)){
+			// time.h defines Sunday as the first day of the week. 
+			// Change this around to make Monday the first day of the week in the config command 
+			m_wday_on_map[0] = (convert_ascii_int(msg->buf + 8, 1) != 0);
+			for(int i = 0; i < 6; i++) {
+				m_wday_on_map[i + 1] = (convert_ascii_int(msg->buf + 2 + i, 1) != 0);
+			}
+			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", m_wday_on_map[1], m_wday_on_map[2], m_wday_on_map[3], 
+					m_wday_on_map[4], m_wday_on_map[5], m_wday_on_map[6], m_wday_on_map[0]);
+		}
 		// Get current time command
 		else if(CHECK_CAM_CMD("gt", 2)){
 			static time_t t;
@@ -319,6 +331,9 @@ static void process_nus_packet(uart_message_t *msg)
 			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
 			send_nus_response_str(response_msg);
 			sprintf(response_msg, "Picture interval: %i", m_picture_interval_s);
+			send_nus_response_str(response_msg);
+			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", m_wday_on_map[1], m_wday_on_map[2], m_wday_on_map[3], 
+						m_wday_on_map[4], m_wday_on_map[5], m_wday_on_map[6], m_wday_on_map[0]);
 			send_nus_response_str(response_msg);
 			sprintf(response_msg, "Pics since reset: %i, pics since BLE activity: %i", m_pics_taken_since_reset, m_pics_taken_since_last_ble_command);
 			send_nus_response_str(response_msg);
@@ -377,7 +392,7 @@ static void time_debug(void)
     ptr = localtime(&t);
 
 	// Check if this is within the active picture period
-	if(!m_time_set_from_app || (ptr->tm_hour >= m_pic_cap_start_hour && ptr->tm_hour <= m_pic_cap_end_hour && ptr->tm_wday >= 1 && ptr->tm_wday <= 5)) {
+	if(!m_time_set_from_app || (ptr->tm_hour >= m_pic_cap_start_hour && ptr->tm_hour <= m_pic_cap_end_hour && m_wday_on_map[ptr->tm_wday])) {
 		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_start_hour && ptr->tm_min < m_pic_cap_start_min) return;
 		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_end_hour && ptr->tm_min > m_pic_cap_end_min) return;
 		if((t - time_at_last_pic) >= m_picture_interval_s) {
