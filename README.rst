@@ -1,31 +1,19 @@
-.. _peripheral_lbs:
-
 Camera timelapse controller
 ###########################
-
-.. contents::
-   :local:
-   :depth: 2
-
-This example allows an nRF5 device to control a camera to take photos at regular intervals, for use in timelapse photography. 
-The goal is to implement an app that can configure the timelapse from a phone, allowing timelapse interval and other settings to be changed easily without having to alter the nRF firmware. 
 
 Overview
 ********
 
+This example allows an nRF5 device to control a camera to take photos at regular intervals, for use in timelapse photography. 
+The goal is to implement an app that can configure the timelapse from a phone, allowing timelapse interval and other settings to be changed easily without having to alter the nRF firmware. 
+
 Requirements
 ************
 
-The sample supports the following development kits:
+nRF Connect SDK v2.3.0
+
+The sample supports the following boards:
 
 - nrf52dk_nrf52832
 - nrf52840dk_nrf52840
-
-User interface
-**************
-
-nRF52DK
-=======
-
-BBC Microbit2
-=============
+- nrf52840dongle_nrf52840

@@ -9,7 +9,7 @@ typedef struct {
 	uint32_t pin_shutter;
 } cam_tl_control_config_t;
 
-void cam_tl_control_init(cam_tl_control_config_t *config);
+int cam_tl_control_init(cam_tl_control_config_t *config);
 
 void cam_tl_control_take_picture(void);
 

@@ -1,0 +1,13 @@
+/{
+	cam_interface {
+		compatible = "gpio-leds";
+		pin_focus: pin_focus {
+			gpios = <&gpio0 24 (GPIO_OPEN_DRAIN | (1 << 8))>;
+			label = "Activate camera focus pin";
+		};
+		pin_shutter: pin_shutter {
+			gpios = <&gpio0 25 (GPIO_OPEN_DRAIN | (1 << 8))>;
+			label = "Activate camera shutter pin";
+		};
+	};
+};
