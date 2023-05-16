@@ -38,7 +38,7 @@
 
 #define RUN_STATUS_LED          DK_LED1
 #define CON_STATUS_LED          DK_LED2
-#define RUN_LED_BLINK_INTERVAL  100
+#define RUN_LED_BLINK_INTERVAL  500
 
 #define USER_LED                DK_LED3
 
@@ -407,7 +407,6 @@ static void time_debug(void)
 
 void main(void)
 {
-	int blink_status = 0;
 	int err;
 
 	printk("Starting Camera timelapse control example\n");
@@ -458,8 +457,10 @@ void main(void)
 	static struct tm *ptr;
 	uint32_t time_debug_counter = 0;
 	for (;;) {
-		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
-		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
+		dk_set_led(RUN_STATUS_LED, 1);
+		k_msleep(10);
+		dk_set_led(RUN_STATUS_LED, 0);
+		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL - 10));
 
 		// If the user button is pressed, take a picture
 		if(take_picture_requested) {
