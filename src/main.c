@@ -437,6 +437,11 @@ void main(void)
 		bt_conn_auth_cb_register(&conn_auth_callbacks);
 	}
 
+	err = flash_handler_init();
+	if (err) {
+		printk("Error initializing flash\n");
+	}
+	
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
@@ -444,10 +449,6 @@ void main(void)
 	}
 	
 	printk("Bluetooth initialized\n");
-
-	if (IS_ENABLED(CONFIG_SETTINGS)) {
-		settings_load();
-	}
 
 	err = bt_nus_init(&nus_callbacks);
 	if (err) {

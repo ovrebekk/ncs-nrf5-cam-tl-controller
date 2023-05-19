@@ -18,6 +18,7 @@ target_include_directories(app PRIVATE include)
 target_sources(app PRIVATE
   src/main.c
   src/cam_tl_control.c
+  src/flash_handler.c
 )
 
 # NORDIC SDK APP END
