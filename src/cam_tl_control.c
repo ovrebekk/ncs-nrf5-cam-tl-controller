@@ -2,17 +2,13 @@
 #include "nrf.h"
 #include <zephyr/drivers/gpio.h>
 
-static cam_tl_control_config_t m_local_config;
-
 struct gpio_dt_spec pin_focus = GPIO_DT_SPEC_GET(DT_NODELABEL(pin_focus), gpios);
 struct gpio_dt_spec pin_shutter = GPIO_DT_SPEC_GET(DT_NODELABEL(pin_shutter), gpios);
 
-int cam_tl_control_init(cam_tl_control_config_t *config)
+int cam_tl_control_init()
 {
 	int ret;
 
-	m_local_config = *config;
-	
 	if(!device_is_ready(pin_focus.port)) {
 		return -ENXIO;
 	}

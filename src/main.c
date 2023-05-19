@@ -417,8 +417,7 @@ void main(void)
 
 	printk("Starting Camera timelapse control example\n");
 
-	cam_tl_control_config_t cam_config = {.pin_focus = 24, .pin_shutter = 25};
-	cam_tl_control_init(&cam_config);
+	cam_tl_control_init();
 
 	err = dk_leds_init();
 	if (err) {
@@ -441,7 +440,7 @@ void main(void)
 	if (err) {
 		printk("Error initializing flash\n");
 	}
-	
+
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
