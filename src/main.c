@@ -394,10 +394,14 @@ static void time_debug(void)
     ptr = localtime(&t);
 
 	// Check if this is within the active picture period
+	int second_in_day_offset;
 	if(!m_time_set_from_app || (ptr->tm_hour >= app_settings.pic_cap_start_hour && ptr->tm_hour <= app_settings.pic_cap_end_hour && app_settings.wday_on_map[ptr->tm_wday])) {
 		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_start_hour && ptr->tm_min < app_settings.pic_cap_start_min) return;
 		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_end_hour && ptr->tm_min > app_settings.pic_cap_end_min) return;
-		if((t - time_at_last_pic) >= app_settings.picture_interval_s) {
+		
+		// In order to make picture capture happen on natural time boundaries, use the modulo operator
+		second_in_day_offset = ptr->tm_hour * 3600 + ptr->tm_min * 60 + ptr->tm_sec;
+		if((second_in_day_offset % app_settings.picture_interval_s) == 0) {
 			time_at_last_pic = t;
 			printk("Taking picture at time %s\n", asctime(ptr));
 			cam_tl_control_take_picture();
