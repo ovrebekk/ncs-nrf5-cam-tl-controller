@@ -31,6 +31,7 @@
 #include <dk_buttons_and_leds.h>
 
 #include "cam_tl_control.h"
+#include "app_settings.h"
 
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
@@ -49,12 +50,12 @@
 
 // Until the kit is configured through the app, run at a constant interval (since accurate time is not set)
 static bool m_time_set_from_app = false;
-static int m_picture_interval_s = 10*60;
-static int m_pic_cap_start_hour = 8;
-static int m_pic_cap_start_min = 0;
-static int m_pic_cap_end_hour = 17;
-static int m_pic_cap_end_min = 59;
-static bool m_wday_on_map[7] = {true, true, true, true, true, true, true};
+static app_settings_t app_settings = {.picture_interval_s = 10*60,
+									  .pic_cap_start_hour = 8,
+									  .pic_cap_start_min = 0,
+									  .pic_cap_end_hour = 17,
+									  .pic_cap_end_min = 59,
+									  .wday_on_map = {true, true, true, true, true, true, true}};
 static bool m_nus_notifications_enabled = false;
 
 static int m_pics_taken_since_reset = 0;
@@ -287,32 +288,33 @@ static void process_nus_packet(uart_message_t *msg)
 		}
 		// Set capture interval command
 		else if(CHECK_CAM_CMD("si", 6)){
-			m_picture_interval_s = convert_ascii_int(msg->buf + 2, 4);
-			if(m_picture_interval_s < 30) m_picture_interval_s = 30;
-			sprintf(response_msg, "Picture interval set to %i", m_picture_interval_s);
+			app_settings.picture_interval_s = convert_ascii_int(msg->buf + 2, 4);
+			if(app_settings.picture_interval_s < 30) app_settings.picture_interval_s = 30;
+			sprintf(response_msg, "Picture interval set to %i", app_settings.picture_interval_s);
 		}
 		// Set capture start time command
 		else if(CHECK_CAM_CMD("cs", 6)){
-			m_pic_cap_start_hour = convert_ascii_int(msg->buf + 2, 2);
-			m_pic_cap_start_min = convert_ascii_int(msg->buf + 4, 2);
-			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_start_hour, m_pic_cap_start_min);
+			app_settings.pic_cap_start_hour = convert_ascii_int(msg->buf + 2, 2);
+			app_settings.pic_cap_start_min = convert_ascii_int(msg->buf + 4, 2);
+			sprintf(response_msg, "Picture start time at %i:%02i", app_settings.pic_cap_start_hour, app_settings.pic_cap_start_min);
 		}
 		// Set capture end time command
 		else if(CHECK_CAM_CMD("ce", 6)){
-			m_pic_cap_end_hour = convert_ascii_int(msg->buf + 2, 2);
-			m_pic_cap_end_min = convert_ascii_int(msg->buf + 4, 2);
-			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
+			app_settings.pic_cap_end_hour = convert_ascii_int(msg->buf + 2, 2);
+			app_settings.pic_cap_end_min = convert_ascii_int(msg->buf + 4, 2);
+			sprintf(response_msg, "Picture end time at %i:%02i", app_settings.pic_cap_end_hour, app_settings.pic_cap_end_min);
 		}
 		// Set weekday map command
 		else if(CHECK_CAM_CMD("wm", 9)){
 			// time.h defines Sunday as the first day of the week. 
 			// Change this around to make Monday the first day of the week in the config command 
-			m_wday_on_map[0] = (convert_ascii_int(msg->buf + 8, 1) != 0);
+			app_settings.wday_on_map[0] = (convert_ascii_int(msg->buf + 8, 1) != 0);
 			for(int i = 0; i < 6; i++) {
-				m_wday_on_map[i + 1] = (convert_ascii_int(msg->buf + 2 + i, 1) != 0);
+				app_settings.wday_on_map[i + 1] = (convert_ascii_int(msg->buf + 2 + i, 1) != 0);
 			}
-			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", m_wday_on_map[1], m_wday_on_map[2], m_wday_on_map[3], 
-					m_wday_on_map[4], m_wday_on_map[5], m_wday_on_map[6], m_wday_on_map[0]);
+			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", app_settings.wday_on_map[1], app_settings.wday_on_map[2], 
+					app_settings.wday_on_map[3], app_settings.wday_on_map[4], app_settings.wday_on_map[5], 
+					app_settings.wday_on_map[6], app_settings.wday_on_map[0]);
 		}
 		// Get current time command
 		else if(CHECK_CAM_CMD("gt", 2)){
@@ -326,14 +328,14 @@ static void process_nus_packet(uart_message_t *msg)
 		}
 		// Get status command
 		else if(CHECK_CAM_CMD("gs", 2)){
-			sprintf(response_msg, "Picture start time at %i:%02i", m_pic_cap_start_hour, m_pic_cap_start_min);
+			sprintf(response_msg, "Picture start time at %i:%02i", app_settings.pic_cap_start_hour, app_settings.pic_cap_start_min);
 			send_nus_response_str(response_msg);
-			sprintf(response_msg, "Picture end time at %i:%02i", m_pic_cap_end_hour, m_pic_cap_end_min);
+			sprintf(response_msg, "Picture end time at %i:%02i", app_settings.pic_cap_end_hour, app_settings.pic_cap_end_min);
 			send_nus_response_str(response_msg);
-			sprintf(response_msg, "Picture interval: %i", m_picture_interval_s);
+			sprintf(response_msg, "Picture interval: %i", app_settings.picture_interval_s);
 			send_nus_response_str(response_msg);
-			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", m_wday_on_map[1], m_wday_on_map[2], m_wday_on_map[3], 
-						m_wday_on_map[4], m_wday_on_map[5], m_wday_on_map[6], m_wday_on_map[0]);
+			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", app_settings.wday_on_map[1], app_settings.wday_on_map[2], app_settings.wday_on_map[3], 
+						app_settings.wday_on_map[4], app_settings.wday_on_map[5], app_settings.wday_on_map[6], app_settings.wday_on_map[0]);
 			send_nus_response_str(response_msg);
 			sprintf(response_msg, "Pics since reset: %i, pics since BLE activity: %i", m_pics_taken_since_reset, m_pics_taken_since_last_ble_command);
 			send_nus_response_str(response_msg);
@@ -392,10 +394,10 @@ static void time_debug(void)
     ptr = localtime(&t);
 
 	// Check if this is within the active picture period
-	if(!m_time_set_from_app || (ptr->tm_hour >= m_pic_cap_start_hour && ptr->tm_hour <= m_pic_cap_end_hour && m_wday_on_map[ptr->tm_wday])) {
-		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_start_hour && ptr->tm_min < m_pic_cap_start_min) return;
-		if(m_time_set_from_app && ptr->tm_hour == m_pic_cap_end_hour && ptr->tm_min > m_pic_cap_end_min) return;
-		if((t - time_at_last_pic) >= m_picture_interval_s) {
+	if(!m_time_set_from_app || (ptr->tm_hour >= app_settings.pic_cap_start_hour && ptr->tm_hour <= app_settings.pic_cap_end_hour && app_settings.wday_on_map[ptr->tm_wday])) {
+		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_start_hour && ptr->tm_min < app_settings.pic_cap_start_min) return;
+		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_end_hour && ptr->tm_min > app_settings.pic_cap_end_min) return;
+		if((t - time_at_last_pic) >= app_settings.picture_interval_s) {
 			time_at_last_pic = t;
 			printk("Taking picture at time %s\n", asctime(ptr));
 			cam_tl_control_take_picture();
