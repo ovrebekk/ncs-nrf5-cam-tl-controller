@@ -417,6 +417,12 @@ static void time_debug(void)
 	}
 }
 
+static bool bt_is_enabled = false;
+void bt_ready(int error)
+{
+	if (error == 0) bt_is_enabled = true;
+}
+
 void main(void)
 {
 	int err;
@@ -460,14 +466,16 @@ void main(void)
 		printk("ERROR writing flash\n");
 	}
 
-	k_msleep(2000);
-	
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
 		return;
 	}
-	
+
+	if (IS_ENABLED(CONFIG_SETTINGS)) {
+		settings_load();
+	}
+
 	printk("Bluetooth initialized\n");
 
 	err = bt_nus_init(&nus_callbacks);
