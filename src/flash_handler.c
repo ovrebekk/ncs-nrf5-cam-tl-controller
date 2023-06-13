@@ -3,78 +3,61 @@
 #include <stdio.h>
 
 #include <zephyr/device.h>
-#include <zephyr/fs/fs.h>
-#include <zephyr/fs/littlefs.h>
+//#include <zephyr/fs/fs.h>
 //#include <zephyr/logging/log.h>
+#include <zephyr/fs/nvs.h>
+#include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
-
-char *highscore_file_name = "highscore.txt";
+#include <zephyr/settings/settings.h>
 
 //LOG_MODULE_REGISTER(flash_handler);
 
-#define PARTITION_NODE DT_NODELABEL(lfs1)
+#define NVS_PARTITION		storage_partition
+#define NVS_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(NVS_PARTITION)
+#define NVS_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(NVS_PARTITION)
 
-#define MAX_PATH_LEN 255
+static struct nvs_fs nvs_fs;
 
-FS_FSTAB_DECLARE_ENTRY(PARTITION_NODE);
-
-struct fs_mount_t *mp = &FS_FSTAB_ENTRY(PARTITION_NODE);
-
-static char fname[MAX_PATH_LEN];
 int flash_handler_init(void)
 {
-	struct fs_statvfs sbuf;
 	int err;
+	struct flash_pages_info info;
 
-	printk("Initializing littlefs\n");
-
-#if 0
-	rc = littlefs_mount(mp);
-	if (rc < 0) {
-		return;
+	/* define the nvs file system by settings with:
+	 *	sector_size equal to the pagesize,
+	 *	3 sectors
+	 *	starting at NVS_PARTITION_OFFSET
+	 */
+	nvs_fs.flash_device = NVS_PARTITION_DEVICE;
+	if (!device_is_ready(nvs_fs.flash_device)) {
+		printk("Flash device %s is not ready\n", nvs_fs.flash_device->name);
+		return -ENFILE;
 	}
-#endif
-
-	snprintf(fname, sizeof(fname), "%s/%s", mp->mnt_point, highscore_file_name);
-
-	err = fs_statvfs(mp->mnt_point, &sbuf);
-	if (err < 0) {
-		printk("FAIL: statvfs: %d\n", err);
-		return -1;
+	nvs_fs.offset = NVS_PARTITION_OFFSET;
+	err = flash_get_page_info_by_offs(nvs_fs.flash_device, nvs_fs.offset, &info);
+	if (err) {
+		printk("Unable to get page info\n");
+		return -ENFILE;
 	}
+	nvs_fs.sector_size = info.size;
+	nvs_fs.sector_count = 3U;
 
-	printk("%s: bsize = %lu ; frsize = %lu ;"
-		   " blocks = %lu ; bfree = %lu\n",
-		   mp->mnt_point,
-		   sbuf.f_bsize, sbuf.f_frsize,
-		   sbuf.f_blocks, sbuf.f_bfree);
+    err = nvs_mount(&nvs_fs);
+	if (err) {
+		printk("Flash Init failed\n");
+		return -ENFILE;
+	}
 
     return 0;
 }
-static struct fs_file_t file;
 
 int flash_handler_read(app_settings_t *settings)
 {
-	int err;
     static app_settings_t local_settings;
 
-    fs_file_t_init(&file);
-    err = fs_open(&file, fname, FS_O_CREATE | FS_O_RDWR);
-    if (err < 0) {
-        printk("FAIL: open %s: %d\n", fname, err);
-        return err;
-    }
-
-	err = fs_read(&file, (void *)&local_settings, sizeof(app_settings_t));
-	if (err < sizeof(app_settings_t)) {
-		printk("FAIL: read %s: [rd:%d]\n", fname, err);
-        return -EINVAL;
-    }
-
-    err = fs_close(&file);
-    if (err) {
-        printk("FAIL: close (err %i)\n", err);
-        return err;
+    ssize_t read_size = nvs_read(&nvs_fs, 26, &local_settings, sizeof(app_settings_t));
+    if (read_size != sizeof(app_settings_t)) {
+        return -ENFILE;
     }
 
     // If all the operations were successful, copy the read settings into the out pointer
@@ -84,38 +67,13 @@ int flash_handler_read(app_settings_t *settings)
 
 int flash_handler_write(app_settings_t *settings)
 {
-    int ret;
-
-    fs_file_t_init(&file);
-    ret = fs_open(&file, fname, FS_O_CREATE | FS_O_APPEND | FS_O_RDWR);
-    if (ret < 0) {
-        printk("FAIL: open %s: %d", fname, ret);
-        return ret;
+    ssize_t written_size = nvs_write(&nvs_fs, 26, settings, sizeof(app_settings_t));
+    if (written_size == 0) {
+        // Identical settings, nothing written to flash
+        return 0;
+    } else if (written_size != sizeof(app_settings_t)) {
+        return -ENFILE;
     }
 
-    ret = fs_write(&file, (void*)settings, sizeof(app_settings_t));
-    if (ret < 0) {
-        printk("FAIL: write name (err %i)", ret);
-        return ret;
-    }
-
-    ret = fs_close(&file);
-    if (ret) {
-        printk("FAIL: close (err %i)", ret);
-        return ret;
-    }
-
-    return 0;
-}
-
-int flash_handler_erase(void)
-{
-    int ret; 
-    ret = fs_unlink(fname);
-    if (ret < 0) {
-        printk("Error deleting file");
-        return ret;
-    }
-    
     return 0;
 }
