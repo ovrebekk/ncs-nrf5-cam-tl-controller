@@ -32,6 +32,7 @@
 
 #include "cam_tl_control.h"
 #include "app_settings.h"
+#include "flash_handler.h"
 
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
@@ -57,6 +58,7 @@ static app_settings_t app_settings = {.picture_interval_s = 10*60,
 									  .pic_cap_end_min = 59,
 									  .wday_on_map = {true, true, true, true, true, true, true}};
 static bool m_nus_notifications_enabled = false;
+static bool m_settings_changed = false;
 
 static int m_pics_taken_since_reset = 0;
 static int m_pics_taken_since_last_ble_command = 0;
@@ -291,18 +293,21 @@ static void process_nus_packet(uart_message_t *msg)
 			app_settings.picture_interval_s = convert_ascii_int(msg->buf + 2, 4);
 			if(app_settings.picture_interval_s < 30) app_settings.picture_interval_s = 30;
 			sprintf(response_msg, "Picture interval set to %i", app_settings.picture_interval_s);
+			m_settings_changed = true;
 		}
 		// Set capture start time command
 		else if(CHECK_CAM_CMD("cs", 6)){
 			app_settings.pic_cap_start_hour = convert_ascii_int(msg->buf + 2, 2);
 			app_settings.pic_cap_start_min = convert_ascii_int(msg->buf + 4, 2);
 			sprintf(response_msg, "Picture start time at %i:%02i", app_settings.pic_cap_start_hour, app_settings.pic_cap_start_min);
+			m_settings_changed = true;
 		}
 		// Set capture end time command
 		else if(CHECK_CAM_CMD("ce", 6)){
 			app_settings.pic_cap_end_hour = convert_ascii_int(msg->buf + 2, 2);
 			app_settings.pic_cap_end_min = convert_ascii_int(msg->buf + 4, 2);
 			sprintf(response_msg, "Picture end time at %i:%02i", app_settings.pic_cap_end_hour, app_settings.pic_cap_end_min);
+			m_settings_changed = true;
 		}
 		// Set weekday map command
 		else if(CHECK_CAM_CMD("wm", 9)){
@@ -315,6 +320,7 @@ static void process_nus_packet(uart_message_t *msg)
 			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", app_settings.wday_on_map[1], app_settings.wday_on_map[2], 
 					app_settings.wday_on_map[3], app_settings.wday_on_map[4], app_settings.wday_on_map[5], 
 					app_settings.wday_on_map[6], app_settings.wday_on_map[0]);
+			m_settings_changed = true;
 		}
 		// Get current time command
 		else if(CHECK_CAM_CMD("gt", 2)){
@@ -441,6 +447,21 @@ void main(void)
 		printk("Error initializing flash\n");
 	}
 
+	err = flash_handler_read(&app_settings);
+	if (err) {
+		printk("No settings found in flash. Using default values\n");
+	}
+	else {
+		printk("Settings loaded from flash!");
+	}
+
+	err = flash_handler_write(&app_settings);
+	if (err) {
+		printk("ERROR writing flash\n");
+	}
+
+	k_msleep(2000);
+	
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
@@ -486,6 +507,15 @@ void main(void)
 			sprintf(printbuf, "Current time: %s", asctime(ptr));
 			printk("Current time requested: %s\n", asctime(ptr));
 			send_nus_response_str(printbuf);
+		}
+
+		if(m_settings_changed) {
+			m_settings_changed = false;
+			app_settings.last_updated_time = time(NULL);
+			err = flash_handler_write(&app_settings);
+			if (err) {
+				printk("Flash write error (err %i)\n", err);
+			}
 		}
 
 		if(time_debug_counter > 1000) {

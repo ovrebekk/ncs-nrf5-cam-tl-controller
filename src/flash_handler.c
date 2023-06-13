@@ -12,29 +12,13 @@ char *highscore_file_name = "highscore.txt";
 
 //LOG_MODULE_REGISTER(flash_handler);
 
-#define PARTITION_NODE DT_NODELABEL(lfs)
+#define PARTITION_NODE DT_NODELABEL(lfs1)
 
 #define MAX_PATH_LEN 255
 
-#if DT_NODE_EXISTS(PARTITION_NODE)
 FS_FSTAB_DECLARE_ENTRY(PARTITION_NODE);
-#else /* PARTITION_NODE */
-FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
-static struct fs_mount_t lfs_storage_mnt = {
-	.type = FS_LITTLEFS,
-	.fs_data = &storage,
-	.storage_dev = (void *)FIXED_PARTITION_ID(storage_partition),
-	.mnt_point = "/lfs",
-};
-#endif /* PARTITION_NODE */
 
-	struct fs_mount_t *mp =
-#if DT_NODE_EXISTS(PARTITION_NODE)
-		&FS_FSTAB_ENTRY(PARTITION_NODE)
-#else
-		&lfs_storage_mnt
-#endif
-		;
+struct fs_mount_t *mp = &FS_FSTAB_ENTRY(PARTITION_NODE);
 
 static char fname[MAX_PATH_LEN];
 int flash_handler_init(void)
@@ -72,34 +56,29 @@ static struct fs_file_t file;
 int flash_handler_read(app_settings_t *settings)
 {
 	int err;
+    static app_settings_t local_settings;
 
     fs_file_t_init(&file);
     err = fs_open(&file, fname, FS_O_CREATE | FS_O_RDWR);
     if (err < 0) {
-        printk("FAIL: open %s: %d", fname, err);
+        printk("FAIL: open %s: %d\n", fname, err);
         return err;
     }
-#if 0
-	err = fs_read(&file, name, HIGHSCORE_STR_LEN_MAX);
-	if (err <= 0) {
-		printk("FAIL: read %s: [rd:%d]", fname, err);
-        return err;
+
+	err = fs_read(&file, (void *)&local_settings, sizeof(app_settings_t));
+	if (err < sizeof(app_settings_t)) {
+		printk("FAIL: read %s: [rd:%d]\n", fname, err);
+        return -EINVAL;
     }
-    //LOG_WRN("Read done");
-    err = fs_read(&file, email, HIGHSCORE_STR_LEN_MAX);
-	if (err <= 0) {
-		printk("FAIL: read %s: [rd:%d]", fname, err);
-        return err;
-    }
-    //LOG_WRN("Read done");
-    index_read++;
-    *pos = index_read;
-    #endif
+
     err = fs_close(&file);
     if (err) {
-        printk("FAIL: close (err %i)", err);
+        printk("FAIL: close (err %i)\n", err);
         return err;
     }
+
+    // If all the operations were successful, copy the read settings into the out pointer
+    *settings = local_settings;
     return 0;
 }
 
@@ -113,20 +92,13 @@ int flash_handler_write(app_settings_t *settings)
         printk("FAIL: open %s: %d", fname, ret);
         return ret;
     }
-#if 0
-    ret = fs_write(&file, name, HIGHSCORE_STR_LEN_MAX);
+
+    ret = fs_write(&file, (void*)settings, sizeof(app_settings_t));
     if (ret < 0) {
         printk("FAIL: write name (err %i)", ret);
         return ret;
     }
-    //LOG_WRN("write done");
-    ret = fs_write(&file, email, HIGHSCORE_STR_LEN_MAX);
-    if (ret < 0) {
-        printk("FAIL: write email (err %i)", ret);
-        return ret;
-    }
-    //LOG_WRN("write done");
-#endif
+
     ret = fs_close(&file);
     if (ret) {
         printk("FAIL: close (err %i)", ret);
