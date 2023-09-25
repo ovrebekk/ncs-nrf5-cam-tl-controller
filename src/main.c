@@ -52,6 +52,7 @@
 // Until the kit is configured through the app, run at a constant interval (since accurate time is not set)
 static bool m_time_set_from_app = false;
 static app_settings_t app_settings = {.picture_interval_s = 10*60,
+									  .downtime_pic_int_s = 0,
 									  .pic_cap_start_hour = 8,
 									  .pic_cap_start_min = 0,
 									  .pic_cap_end_hour = 17,
@@ -295,6 +296,13 @@ static void process_nus_packet(uart_message_t *msg)
 			sprintf(response_msg, "Picture interval set to %i", app_settings.picture_interval_s);
 			m_settings_changed = true;
 		}
+		// Set downtime capture interval command
+		else if(CHECK_CAM_CMD("di", 6)){
+			app_settings.downtime_pic_int_s = convert_ascii_int(msg->buf + 2, 4);
+			if(app_settings.downtime_pic_int_s < 30) app_settings.downtime_pic_int_s = 0;
+			sprintf(response_msg, "Picture DT int set to %i", app_settings.downtime_pic_int_s);
+			m_settings_changed = true;
+		}
 		// Set capture start time command
 		else if(CHECK_CAM_CMD("cs", 6)){
 			app_settings.pic_cap_start_hour = convert_ascii_int(msg->buf + 2, 2);
@@ -339,6 +347,8 @@ static void process_nus_packet(uart_message_t *msg)
 			sprintf(response_msg, "Picture end time at %i:%02i", app_settings.pic_cap_end_hour, app_settings.pic_cap_end_min);
 			send_nus_response_str(response_msg);
 			sprintf(response_msg, "Picture interval: %i", app_settings.picture_interval_s);
+			send_nus_response_str(response_msg);
+			sprintf(response_msg, "Picture DT int: %i", app_settings.downtime_pic_int_s);
 			send_nus_response_str(response_msg);
 			sprintf(response_msg, "Weekday map: %i-%i-%i-%i-%i-%i-%i", app_settings.wday_on_map[1], app_settings.wday_on_map[2], app_settings.wday_on_map[3], 
 						app_settings.wday_on_map[4], app_settings.wday_on_map[5], app_settings.wday_on_map[6], app_settings.wday_on_map[0]);
@@ -401,13 +411,27 @@ static void time_debug(void)
 
 	// Check if this is within the active picture period
 	int second_in_day_offset;
-	if(!m_time_set_from_app || (ptr->tm_hour >= app_settings.pic_cap_start_hour && ptr->tm_hour <= app_settings.pic_cap_end_hour && app_settings.wday_on_map[ptr->tm_wday])) {
-		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_start_hour && ptr->tm_min < app_settings.pic_cap_start_min) return;
-		if(m_time_set_from_app && ptr->tm_hour == app_settings.pic_cap_end_hour && ptr->tm_min > app_settings.pic_cap_end_min) return;
-		
+	int interval;
+	int time_start_minutes = app_settings.pic_cap_start_hour * 60 + app_settings.pic_cap_start_min;
+	int time_end_minutes = app_settings.pic_cap_end_hour * 60 + app_settings.pic_cap_end_min;
+	int current_time_minutes = ptr->tm_hour * 60 + ptr->tm_min; 
+	// If no BLE configuration occurred since reset, use a 30 second interval
+	if(!m_time_set_from_app) {
+		interval = 30;
+	} else {
+		// First check if we are within the active period
+		if(current_time_minutes >= time_start_minutes && current_time_minutes <= time_end_minutes && app_settings.wday_on_map[ptr->tm_wday]) {
+			interval = app_settings.picture_interval_s;
+		// If we are not within the active period and the downtime interval is 0, no pictures will be taken
+		} else if(app_settings.downtime_pic_int_s == 0) {
+			return;
+		// Otherwise use the downtime interval
+		} else {
+			interval = app_settings.downtime_pic_int_s;
+		}
 		// In order to make picture capture happen on natural time boundaries, use the modulo operator
 		second_in_day_offset = ptr->tm_hour * 3600 + ptr->tm_min * 60 + ptr->tm_sec;
-		if((second_in_day_offset % app_settings.picture_interval_s) == 0) {
+		if((second_in_day_offset % interval) == 0) {
 			time_at_last_pic = t;
 			printk("Taking picture at time %s\n", asctime(ptr));
 			cam_tl_control_take_picture();

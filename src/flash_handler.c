@@ -60,6 +60,10 @@ int flash_handler_read(app_settings_t *settings)
         return -ENFILE;
     }
 
+	if (local_settings._magic_number != MAGIC_NUMBER) {
+		return -EINVAL;
+	}
+
     // If all the operations were successful, copy the read settings into the out pointer
     *settings = local_settings;
     return 0;
@@ -67,6 +71,7 @@ int flash_handler_read(app_settings_t *settings)
 
 int flash_handler_write(app_settings_t *settings)
 {
+	settings->_magic_number = MAGIC_NUMBER;
     ssize_t written_size = nvs_write(&nvs_fs, 26, settings, sizeof(app_settings_t));
     if (written_size == 0) {
         // Identical settings, nothing written to flash

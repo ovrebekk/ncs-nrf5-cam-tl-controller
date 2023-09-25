@@ -10,7 +10,7 @@ The goal is to implement an app that can configure the timelapse from a phone, a
 Requirements
 ************
 
-nRF Connect SDK v2.3.0
+nRF Connect SDK v2.4.2
 
 The sample supports the following boards:
 
